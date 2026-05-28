@@ -232,6 +232,118 @@ body {
   display: flex; align-items: center; gap: 8px;
   padding: 4px 0 6px; flex-wrap: wrap;
 }
+.key-toggle {
+  font-size: 11px; color: #b45309; cursor: pointer;
+  display: flex; align-items: center; gap: 3px; user-select: none;
+  background: #fffbeb; border: 1px solid #fcd34d;
+  border-radius: 4px; padding: 2px 6px;
+}
+.key-toggle input { margin: 0; }
+.key-toggle:has(input:checked) {
+  background: #fef3c7; border-color: #f59e0b; color: #92400e;
+}
+
+/* Signature Check Panel */
+.sig-result { margin-bottom: 8px; }
+.sig-box {
+  border: 2px solid #d1d5db;
+  border-radius: 8px;
+  padding: 10px 12px;
+}
+.sig-need { background: #fef2f2; border-color: #fca5a5; }
+.sig-likely { background: #fffbeb; border-color: #fcd34d; }
+.sig-maybe-not { background: #f0fdf4; border-color: #86efac; }
+.sig-none { background: #f8f9fc; border-color: #e5e7eb; }
+
+.sig-verdict {
+  font-size: 14px; font-weight: 700;
+  display: flex; align-items: center; gap: 8px;
+  margin-bottom: 6px;
+}
+.sig-need .sig-verdict { color: #dc2626; }
+.sig-likely .sig-verdict { color: #b45309; }
+.sig-maybe-not .sig-verdict { color: #059669; }
+.sig-none .sig-verdict { color: #6b7280; }
+
+.sig-icon {
+  width: 24px; height: 24px; border-radius: 50%;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 13px; font-weight: 900; color: #fff; flex-shrink: 0;
+}
+.sig-need .sig-icon { background: #dc2626; }
+.sig-likely .sig-icon { background: #d97706; }
+.sig-maybe-not .sig-icon { background: #059669; }
+.sig-none .sig-icon { background: #9ca3af; }
+
+.sig-evidence { font-size: 11px; color: #374151; margin-bottom: 4px; }
+.sig-evi-item { padding: 2px 0; }
+.sig-evi-item::before { content: '• '; color: #9ca3af; }
+
+.sig-details { margin-top: 6px; border-top: 1px solid rgba(0,0,0,0.1); padding-top: 6px; }
+.sig-detail-title { font-size: 11px; font-weight: 600; color: #6b7280; margin: 4px 0 2px; }
+.sig-detail-row { font-size: 10px; padding: 2px 0; display: flex; align-items: center; gap: 6px; }
+.sig-detail-row code { font-size: 9px; color: #6b7280; word-break: break-all; flex: 1; }
+
+.sig-tag {
+  font-size: 9px; padding: 1px 5px; border-radius: 3px;
+  background: #e5e7eb; color: #374151; white-space: nowrap; font-weight: 600;
+}
+.sig-tag-high { background: #fee2e2; color: #dc2626; }
+.sig-tag-med { background: #fef3c7; color: #b45309; }
+
+/* Key Findings Panel */
+.key-findings {
+  background: linear-gradient(135deg, #fef2f2, #fffbeb);
+  border: 1px solid #fecaca;
+  border-radius: 8px;
+  padding: 8px;
+  margin-bottom: 8px;
+}
+.kf-header {
+  font-size: 12px; font-weight: 700; color: #dc2626;
+  margin-bottom: 6px; padding-bottom: 4px;
+  border-bottom: 1px solid #fecaca;
+}
+.kf-item {
+  display: flex; align-items: flex-start; gap: 6px;
+  padding: 3px 0; font-size: 11px;
+  border-bottom: 1px solid #fef2f2;
+}
+.kf-item:last-child { border-bottom: none; }
+.kf-category {
+  background: #dc2626; color: #fff; padding: 1px 5px;
+  border-radius: 3px; font-size: 10px; white-space: nowrap; font-weight: 500;
+}
+.kf-item.kf-medium .kf-category { background: #d97706; }
+.kf-severity {
+  font-size: 9px; font-weight: 700; padding: 1px 4px;
+  border-radius: 2px; white-space: nowrap;
+}
+.kf-item.kf-high .kf-severity { background: #fecaca; color: #dc2626; }
+.kf-item.kf-medium .kf-severity { background: #fef3c7; color: #b45309; }
+.kf-detail { color: #374151; flex: 1; }
+.kf-clickable { cursor: pointer; transition: background 0.15s; }
+.kf-clickable:hover { background: rgba(220,38,38,0.08); }
+.kf-arrow { color: #9ca3af; font-size: 10px; flex-shrink: 0; }
+
+@keyframes kfFlash {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(79,70,229,0); }
+  25% { box-shadow: 0 0 0 4px rgba(79,70,229,0.4); }
+  50% { box-shadow: 0 0 0 8px rgba(79,70,229,0.2); }
+  75% { box-shadow: 0 0 0 4px rgba(79,70,229,0.4); }
+}
+.kf-flash {
+  animation: kfFlash 1.5s ease;
+  border-radius: 6px;
+}
+
+/* Tree tags for key items */
+.kf-tag-high, .kf-tag-medium {
+  font-size: 9px; font-weight: 600; padding: 1px 4px;
+  border-radius: 2px; margin-left: 6px; vertical-align: middle;
+}
+.kf-tag-high { background: #fee2e2; color: #dc2626; }
+.kf-tag-medium { background: #fef3c7; color: #b45309; }
 #dataSummary {
   flex: 1; font-size: 10px; color: #6b7280; white-space: nowrap;
   overflow: hidden; text-overflow: ellipsis;

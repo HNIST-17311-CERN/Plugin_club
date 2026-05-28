@@ -449,3 +449,6 @@ Memory 面板所有数据项（Heap Snapshot、Detached DOM Nodes、Allocation T
 | 2026-05-28 | 补充实现分析（可行性 + 技术手段 + 权限需求） |
 | 2026-05-28 | 确认范围：Elements + Sources + Application 本期实现；Memory 不做；Network 后续 |
 | 2026-05-28 | 实现：extract.js 数据提取脚本 + popup 数据标签页 UI |
+| 2026-05-28 | 新增：重点数据自动识别 + "仅看重点"过滤模式 |
+| 2026-05-28 | 优化：重点数据摘要可点击跳转到树中对应位置，自动展开+闪烁高亮 |
+| 2026-05-28 | 新增：签名算法自动检测 — 扫描 JS 文件/代码模式/Cookie，判定是否需要逆向 |

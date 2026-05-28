@@ -461,6 +461,250 @@
     }
     result.application.globalStates = globalStates;
 
+    // =======================================================================
+    // 4. 签名算法检测
+    // =======================================================================
+    logStep('4.0 signatureCheck');
+    var sigResult = { needReverse: false, confidence: 'none', evidence: [], details: [] };
+
+    // 4.0.1 外链 JS 文件名检测
+    var cryptoFiles = [];
+    var sigFilePatterns = /crypto|encrypt|decrypt|sign(?:ature)?|hmac|md5|sha(?:1|256|512)?|hash|fingerprint|fp\.min|device(?:id|token)?|turing|captcha|btoa|atob/i;
+    externalScripts.forEach(function (s) {
+      var fileName = (s.src || '').split('/').pop();
+      if (sigFilePatterns.test(fileName)) {
+        cryptoFiles.push({ file: fileName, url: s.src, match: fileName.match(sigFilePatterns)[0] });
+      }
+    });
+    if (cryptoFiles.length > 0) {
+      sigResult.evidence.push('检测到 ' + cryptoFiles.length + ' 个加密/签名相关 JS 文件');
+      sigResult.details.push({ type: 'crypto_files', files: cryptoFiles });
+    }
+
+    // 4.0.2 内联脚本代码模式检测
+    var sigCodePatterns = [];
+    var sigPatterns = [
+      { name: '请求签名', pattern: /(?:sign|signature|signvalue|_sign)\s*[=:]/i, weight: 'high' },
+      { name: '哈希/加密调用', pattern: /(?:md5|sha(?:1|256|512)?|hmac|encrypt|decrypt)\s*\(/i, weight: 'high' },
+      { name: 'Base64 编解码', pattern: /(?:btoa|atob|Base64\.encode|Buffer\.from.*base64)/i, weight: 'medium' },
+      { name: 'CryptoJS 库', pattern: /CryptoJS\.(?:AES|MD5|SHA|Hmac|enc|dec)/i, weight: 'high' },
+      { name: 'nonce/时间戳', pattern: /(?:nonce|timestamp|_t|ts)\s*[=:].*(?:sign|signature)/i, weight: 'medium' },
+      { name: '密钥/Secret', pattern: /(?:appKey|appSecret|secretKey|apiSecret|accessKey)\s*[=:]\s*['"]/i, weight: 'high' },
+      { name: 'X-Sign 请求头', pattern: /['"]X-Sign['"]|['"]x-sign['"]|['"]X-Timestamp['"]/i, weight: 'high' },
+      { name: '设备指纹', pattern: /(?:fingerprint|deviceId|device_id|canvas.*fingerprint|webgl.*fingerprint)/i, weight: 'medium' },
+      { name: 'URL 签名参数', pattern: /[?&](?:sign|signature|token|_sign|htk|hash)\s*=/i, weight: 'medium' }
+    ];
+    inlineScripts.forEach(function (s) {
+      sigPatterns.forEach(function (sp) {
+        if (sp.pattern.test(s.code)) {
+          sigCodePatterns.push({ name: sp.name, weight: sp.weight, preview: s.code.substring(Math.max(0, s.code.search(sp.pattern) - 40), s.code.search(sp.pattern) + 80) });
+        }
+      });
+    });
+    // 也检查 documentHTML 中的 URL 参数签名
+    var htmlForSig = result.elements.documentHTML || '';
+    sigPatterns.forEach(function (sp) {
+      if (sp.name === 'URL 签名参数' && sp.pattern.test(htmlForSig)) {
+        var matches = htmlForSig.match(/[?&](sign|signature|token|_sign|htk|hash)=([^&"'\s]+)/gi) || [];
+        if (matches.length > 0 && !sigCodePatterns.some(function (p) { return p.name === 'URL 签名参数'; })) {
+          sigCodePatterns.push({ name: 'URL 签名参数', weight: 'medium', preview: matches.slice(0, 5).join(', ') });
+        }
+      }
+    });
+    if (sigCodePatterns.length > 0) {
+      sigResult.evidence.push('内联代码中发现 ' + sigCodePatterns.length + ' 处签名/加密模式');
+      sigResult.details.push({ type: 'code_patterns', patterns: sigCodePatterns });
+    }
+
+    // 4.0.3 Cookie 中的特征值检测
+    var sigCookies = [];
+    if (result.application.cookies) {
+      var cookiePairs2 = result.application.cookies.split(';');
+      cookiePairs2.forEach(function (c) {
+        var parts = c.trim().split('=');
+        if (parts.length >= 2) {
+          var cName = parts[0].trim();
+          var cVal = parts.slice(1).join('=');
+          // 检测看起来像 hash 的值（hex 32/64位 或 base64）
+          if (/^[0-9a-fA-F]{32,64}$/.test(cVal)) {
+            sigCookies.push({ name: cName, reason: '疑似 MD5/SHA 哈希值 (' + cVal.length + '字符)' });
+          } else if (/^[A-Za-z0-9+/]{40,}={0,2}$/.test(decodeURIComponent(cVal))) {
+            sigCookies.push({ name: cName, reason: '疑似 Base64 编码值' });
+          }
+          // 设备指纹相关 cookie
+          if (/(?:smid|device|fingerprint|fp|visitor)/i.test(cName)) {
+            sigCookies.push({ name: cName, reason: '设备指纹/访客标识' });
+          }
+        }
+      });
+    }
+    if (sigCookies.length > 0) {
+      sigResult.evidence.push('Cookie 中发现 ' + sigCookies.length + ' 个疑似加密/指纹值');
+      sigResult.details.push({ type: 'sig_cookies', cookies: sigCookies });
+    }
+
+    // 4.0.4 综合判定
+    var highEvidence = sigCodePatterns.filter(function (p) { return p.weight === 'high'; }).length;
+    var totalEvidence = cryptoFiles.length + sigCodePatterns.length + sigCookies.length;
+    if (cryptoFiles.length > 0 && highEvidence > 0) {
+      sigResult.needReverse = true;
+      sigResult.confidence = '确定';
+    } else if (cryptoFiles.length > 0 || highEvidence >= 2 || (sigCodePatterns.length >= 2 && sigCookies.length > 0)) {
+      sigResult.needReverse = true;
+      sigResult.confidence = '很可能';
+    } else if (totalEvidence >= 1) {
+      sigResult.needReverse = false;
+      sigResult.confidence = '可能不需要';
+    } else {
+      sigResult.needReverse = false;
+      sigResult.confidence = '不需要';
+    }
+
+    result._signatureCheck = sigResult;
+
+    // =======================================================================
+    // 5. 重点数据自动识别
+    // =======================================================================
+    logStep('5. keyFindings');
+    var findings = [];
+
+    // 4.1 Cookies — 识别认证相关
+    if (result.application.cookies) {
+      var cookiePairs = result.application.cookies.split(';');
+      var authCookies = [];
+      var authNames = /token|session|auth|login|jwt|bearer|access|refresh|sid|uid|user|pass|PHPSESSID|JSESSIONID/i;
+      cookiePairs.forEach(function (c) {
+        var parts = c.trim().split('=');
+        if (parts.length >= 2) {
+          var cName = parts[0].trim();
+          if (authNames.test(cName)) {
+            authCookies.push({ name: cName, value: parts.slice(1).join('=') });
+          }
+        }
+      });
+      if (authCookies.length > 0) {
+        findings.push({ category: '认证凭证', severity: 'high', detail: '发现 ' + authCookies.length + ' 个认证相关 Cookie', data: authCookies });
+      }
+      if (result.application.cookies.length > 0 && authCookies.length === 0) {
+        var cookieEntries = [];
+        cookiePairs.forEach(function (c) {
+          var p = c.trim().split('=');
+          if (p.length >= 2 && p[0].trim()) cookieEntries.push({ name: p[0].trim(), value: p.slice(1).join('=') });
+        });
+        if (cookieEntries.length > 0) {
+          findings.push({ category: 'Cookie', severity: 'medium', detail: '发现 ' + cookieEntries.length + ' 个 Cookie（非 HttpOnly）', data: cookieEntries });
+        }
+      }
+    }
+
+    // 4.2 localStorage/sessionStorage — 识别 token/配置
+    var storageFindings = [];
+    var storageKeys = Object.keys(result.application.localStorage || {});
+    storageKeys.forEach(function (k) {
+      if (k === '__error') return;
+      if (/token|auth|session|jwt|apiKey|secret|credential|config|setting|user/i.test(k) || result.application.localStorage[k].length < 500) {
+        storageFindings.push({ type: 'localStorage', key: k, value: result.application.localStorage[k] });
+      }
+    });
+    var ssKeys = Object.keys(result.application.sessionStorage || {});
+    ssKeys.forEach(function (k) {
+      if (k === '__error') return;
+      if (/token|auth|session|jwt|apiKey|secret/i.test(k)) {
+        storageFindings.push({ type: 'sessionStorage', key: k, value: result.application.sessionStorage[k] });
+      }
+    });
+    if (storageFindings.length > 0) {
+      findings.push({ category: '存储数据', severity: 'high', detail: '发现 ' + storageFindings.length + ' 个可疑存储项', data: storageFindings });
+    }
+
+    // 4.3 表单 — 识别搜索/登录/API 表单
+    var interestingForms = [];
+    (result.elements.forms || []).forEach(function (f) {
+      var isInteresting = false;
+      var reasons = [];
+      if (/search|login|sign|auth|api|query/i.test(f.action || '')) { isInteresting = true; reasons.push('action 指向后端接口'); }
+      if (f.inputs && f.inputs.length > 2) { isInteresting = true; reasons.push('字段数 > 2'); }
+      var hasHidden = f.inputs && f.inputs.some(function (inp) { return inp.type === 'hidden'; });
+      if (hasHidden && f.method === 'POST') { isInteresting = true; reasons.push('POST + 隐藏字段'); }
+      if (isInteresting) interestingForms.push({ action: f.action, method: f.method, inputs: f.inputs, reasons: reasons });
+    });
+    if (interestingForms.length > 0) {
+      findings.push({ category: '表单接口', severity: 'high', detail: '发现 ' + interestingForms.length + ' 个可疑表单', data: interestingForms });
+    }
+
+    // 4.4 内联脚本 — 识别 API 调用/编码/加密
+    var interestingScripts = [];
+    (result.sources.inlineScripts || []).forEach(function (s, i) {
+      var tags = [];
+      if (/fetch\s*\(|axios|XMLHttpRequest|\.ajax|\.get\s*\(|\.post\s*\(|\.getJSON/i.test(s.code)) tags.push('HTTP 请求');
+      if (/btoa|atob|Base64|base64|encodeURI|decodeURI/i.test(s.code)) tags.push('编码/解码');
+      if (/localStorage|sessionStorage|document\.cookie/i.test(s.code)) tags.push('存储操作');
+      if (/token|auth|apiKey|secret|password|credential/i.test(s.code)) tags.push('凭证相关');
+      if (/JSON\.parse|JSON\.stringify/i.test(s.code)) tags.push('JSON 处理');
+      if (/\/\/#\s*sourceMappingURL/.test(s.code)) tags.push('Source Map 引用');
+      if (tags.length > 0) {
+        interestingScripts.push({ index: i + 1, length: s.length, tags: tags, preview: s.code.substring(0, 300) });
+      }
+    });
+    if (interestingScripts.length > 0) {
+      findings.push({ category: '可疑脚本', severity: 'high', detail: '发现 ' + interestingScripts.length + ' 个包含敏感逻辑的内联脚本', data: interestingScripts });
+    }
+
+    // 4.5 全局状态 — 框架初始数据
+    var gsKeys = Object.keys(globalStates);
+    if (gsKeys.length > 0) {
+      findings.push({ category: '全局状态', severity: 'high', detail: '发现 ' + gsKeys.length + ' 个框架注入的初始数据：' + gsKeys.join(', '), data: globalStates });
+    }
+
+    // 4.6 Source Map
+    if (sourceMaps.length > 0) {
+      findings.push({ category: 'Source Map', severity: 'medium', detail: '发现 ' + sourceMaps.length + ' 个 Source Map 引用，可还原源码', data: sourceMaps });
+    }
+
+    // 4.7 JSON-LD
+    if (jsonld.length > 0) {
+      findings.push({ category: '结构化数据', severity: 'medium', detail: '发现 ' + jsonld.length + ' 个 JSON-LD 结构化数据', data: jsonld });
+    }
+
+    // 4.8 CMS 识别
+    var cmsHints = [];
+    var html = result.elements.documentHTML || '';
+    if (/_sitegray|vsbscreen|dynclicks|\.vsb\.|Visual SiteBuilder/i.test(html)) cmsHints.push('Visual SiteBuilder (北京通元)');
+    if (/wp-content|wp-includes|wordpress/i.test(html)) cmsHints.push('WordPress');
+    if (/Drupal|drupal/i.test(html)) cmsHints.push('Drupal');
+    if (/Joomla|joomla/i.test(html)) cmsHints.push('Joomla');
+    if (/vue|react|angular|next|nuxt/i.test(html.toLowerCase()) && cmsHints.length === 0) {
+      // 检查前端框架
+      var frameworks = [];
+      if (/vue|v-bind|v-if|v-for|v-model|__vue__/i.test(html)) frameworks.push('Vue.js');
+      if (/react|react-dom|data-reactroot|data-reactid/i.test(html)) frameworks.push('React');
+      if (/ng-version|_nghost/i.test(html)) frameworks.push('Angular');
+      if (/__NEXT_DATA__|__NUXT__|_next\//i.test(html)) frameworks.push('Next.js/Nuxt');
+      if (frameworks.length > 0) cmsHints.push('前端框架: ' + frameworks.join(', '));
+    }
+    var jsLibs = [];
+    if (/jquery/i.test(html)) jsLibs.push('jQuery');
+    if (/swiper/i.test(html)) jsLibs.push('Swiper');
+    if (/bootstrap/i.test(html)) jsLibs.push('Bootstrap');
+    if (/lodash/i.test(html)) jsLibs.push('Lodash');
+    if (/moment/i.test(html)) jsLibs.push('Moment.js');
+    if (cmsHints.length > 0 || jsLibs.length > 0) {
+      findings.push({ category: '技术栈识别', severity: 'medium', detail: (cmsHints.length > 0 ? 'CMS: ' + cmsHints.join(', ') + '。' : '') + (jsLibs.length > 0 ? 'JS库: ' + jsLibs.join(', ') : ''), data: { cms: cmsHints, libraries: jsLibs } });
+    }
+
+    // 4.9 URL 路径中的 API 模式
+    var allURLs = html.match(/["']([^"']*(?:api|v\d+|graphql|rest|ws|auth|login|oauth)["'][^"']*)/gi) || [];
+    var apiPatterns = [];
+    allURLs.forEach(function (u) {
+      var clean = u.replace(/["']/g, '').substring(0, 200);
+      if (apiPatterns.indexOf(clean) === -1) apiPatterns.push(clean);
+    });
+    if (apiPatterns.length > 0) {
+      findings.push({ category: 'API 端点线索', severity: 'high', detail: '在 HTML 中发现 ' + apiPatterns.length + ' 个疑似 API URL', data: apiPatterns.slice(0, 30) });
+    }
+
+    result._keyFindings = { total: findings.length, items: findings };
+
     logStep('DONE');
     return result;
 

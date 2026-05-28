@@ -30,6 +30,9 @@ var els = {
   dataError: document.getElementById('dataError'),
   dataSection: document.getElementById('dataSection'),
   dataSummary: document.getElementById('dataSummary'),
+  keyOnly: document.getElementById('keyOnly'),
+  sigResult: document.getElementById('sigResult'),
+  keyFindings: document.getElementById('keyFindings'),
   exportDataBtn: document.getElementById('exportDataBtn'),
   dataTree: document.getElementById('dataTree')
 };
@@ -247,8 +250,15 @@ els.extractDataBtn.addEventListener('click', async function () {
       showError(els.dataError, '数据提取失败，请刷新页面重试' + debugInfo);
       setStatus('失败');
     } else {
+      renderSigCheck(pageData._signatureCheck);
+      renderKeyFindings(pageData._keyFindings);
       renderDataTree(pageData);
       els.dataSection.classList.remove('hidden');
+      if (pageData._keyFindings && pageData._keyFindings.total > 0) {
+        els.keyOnly.parentElement.style.display = '';
+      } else {
+        els.keyOnly.parentElement.style.display = 'none';
+      }
       var summary = [];
       if (pageData.elements) {
         summary.push('元素 ' + (pageData.elements.totalElements || 0) + ' 个');
@@ -272,6 +282,137 @@ els.extractDataBtn.addEventListener('click', async function () {
     setStatus('失败');
   } finally {
     els.extractDataBtn.disabled = false;
+  }
+});
+
+// keyFindings category → tree anchor 映射
+var KF_ANCHORS = {
+  '认证凭证': 'kf-cookies',
+  'Cookie': 'kf-cookies',
+  '存储数据': 'kf-storage',
+  '表单接口': 'kf-forms',
+  '可疑脚本': 'kf-inline-scripts',
+  '全局状态': 'kf-global-states',
+  'Source Map': 'kf-sourcemaps',
+  '结构化数据': 'kf-jsonld',
+  'API 端点线索': 'kf-api-hints',
+  '技术栈识别': 'kf-tech-stack'
+};
+
+function renderSigCheck(sc) {
+  if (!sc) { els.sigResult.classList.add('hidden'); return; }
+  els.sigResult.classList.remove('hidden');
+
+  var cls, icon, verdict;
+  if (sc.confidence === '确定') {
+    cls = 'sig-need'; icon = '!'; verdict = '需要逆向签名算法';
+  } else if (sc.confidence === '很可能') {
+    cls = 'sig-likely'; icon = '?'; verdict = '很可能需要逆向签名';
+  } else if (sc.confidence === '可能不需要') {
+    cls = 'sig-maybe-not'; icon = '~'; verdict = '可能不需要逆向';
+  } else {
+    cls = 'sig-none'; icon = 'ok'; verdict = '未检测到签名算法';
+  }
+
+  var html = '<div class="sig-box ' + cls + '">';
+  html += '<div class="sig-verdict"><span class="sig-icon">' + icon + '</span>' + escHtml(verdict) + '</div>';
+
+  if (sc.evidence && sc.evidence.length > 0) {
+    html += '<div class="sig-evidence">';
+    sc.evidence.forEach(function (e) { html += '<div class="sig-evi-item">' + escHtml(e) + '</div>'; });
+    html += '</div>';
+  }
+
+  // 展开详情
+  if (sc.details && sc.details.length > 0) {
+    html += '<div class="sig-details">';
+    sc.details.forEach(function (d) {
+      if (d.type === 'crypto_files') {
+        html += '<div class="sig-detail-title">加密/签名 JS 文件：</div>';
+        d.files.forEach(function (f) {
+          html += '<div class="sig-detail-row"><code>' + escHtml(f.file) + '</code><span class="sig-tag">' + escHtml(f.match) + '</span></div>';
+        });
+      } else if (d.type === 'code_patterns') {
+        html += '<div class="sig-detail-title">代码中的签名模式：</div>';
+        d.patterns.forEach(function (p) {
+          html += '<div class="sig-detail-row"><span class="sig-tag ' + (p.weight === 'high' ? 'sig-tag-high' : 'sig-tag-med') + '">' + escHtml(p.name) + '</span><code>' + escHtml(p.preview) + '</code></div>';
+        });
+      } else if (d.type === 'sig_cookies') {
+        html += '<div class="sig-detail-title">可疑 Cookie：</div>';
+        d.cookies.forEach(function (c) {
+          html += '<div class="sig-detail-row"><span class="sig-tag">' + escHtml(c.name) + '</span>' + escHtml(c.reason) + '</div>';
+        });
+      }
+    });
+    html += '</div>';
+  }
+
+  html += '</div>';
+  els.sigResult.innerHTML = html;
+}
+
+function renderKeyFindings(kf) {
+  if (!kf || !kf.items || kf.items.length === 0) {
+    els.keyFindings.classList.add('hidden');
+    return;
+  }
+  els.keyFindings.classList.remove('hidden');
+  var html = '<div class="kf-header">发现 ' + kf.total + ' 个重点数据项（点击跳转）</div>';
+  kf.items.forEach(function (item) {
+    var sevClass = item.severity === 'high' ? 'kf-high' : 'kf-medium';
+    var anchor = KF_ANCHORS[item.category] || '';
+    var clickable = anchor ? ' kf-clickable" onclick="scrollToFinding(\'' + anchor + '\')" title="点击跳转到对应位置' : '"';
+    html += '<div class="kf-item ' + sevClass + clickable + '>';
+    html += '<span class="kf-category">' + escHtml(item.category) + '</span>';
+    html += '<span class="kf-severity">' + (item.severity === 'high' ? '高' : '中') + '</span>';
+    html += '<span class="kf-detail">' + escHtml(item.detail) + '</span>';
+    html += anchor ? '<span class="kf-arrow">&#10132;</span>' : '';
+    html += '</div>';
+  });
+  els.keyFindings.innerHTML = html;
+}
+
+// 跳转到树中的对应位置
+window.scrollToFinding = function (anchor) {
+  var target = document.getElementById(anchor);
+  if (!target) return;
+
+  // 展开所有被折叠的祖先
+  var parent = target.parentElement;
+  while (parent) {
+    if (parent.classList.contains('tree-section-body') && parent.classList.contains('collapsed')) {
+      parent.classList.remove('collapsed');
+      if (parent.previousElementSibling) parent.previousElementSibling.classList.remove('collapsed');
+    }
+    parent = parent.parentElement;
+  }
+
+  // 滚动到目标
+  target.scrollIntoView({ behavior: 'smooth', block: 'center' });
+
+  // 高亮闪烁
+  target.classList.add('kf-flash');
+  setTimeout(function () { target.classList.remove('kf-flash'); }, 1500);
+};
+
+// 重点模式切换
+els.keyOnly.addEventListener('change', function () {
+  var showKeyOnly = this.checked;
+  els.dataTree.querySelectorAll('.tree-section, .tree-sub').forEach(function (el) {
+    var hasHigh = el.querySelector('.kf-tag-high, .kf-tag-medium');
+    if (showKeyOnly) {
+      el.style.display = hasHigh ? '' : 'none';
+    } else {
+      el.style.display = '';
+    }
+  });
+  if (showKeyOnly) {
+    // 自动展开所有重点项
+    els.dataTree.querySelectorAll('.tree-section-title.collapsed, .tree-sub-title.collapsed').forEach(function (el) {
+      if (el.closest('.tree-section, .tree-sub') && el.closest('.tree-section, .tree-sub').querySelector('.kf-tag-high, .kf-tag-medium')) {
+        toggleSection(el);
+      }
+    });
   }
 });
 
@@ -305,7 +446,7 @@ function renderDataTree(data) {
     }
 
     if (data.elements.forms && data.elements.forms.length > 0) {
-      html += '<div class="tree-sub"><div class="tree-sub-title" onclick="toggleSection(this)">表单 (' + data.elements.forms.length + ')</div>';
+      html += '<div class="tree-sub" id="kf-forms"><div class="tree-sub-title" onclick="toggleSection(this)">表单 (' + data.elements.forms.length + ') <span class="kf-tag-high">重点</span></div>';
       html += '<div class="tree-section-body"><pre class="data-pre">' + escHtml(JSON.stringify(data.elements.forms, null, 1)) + '</pre></div></div>';
     }
 
@@ -354,7 +495,7 @@ function renderDataTree(data) {
     html += '<div class="tree-section-body">';
 
     if (data.sources.inlineScripts && data.sources.inlineScripts.length > 0) {
-      html += '<div class="tree-sub"><div class="tree-sub-title" onclick="toggleSection(this)">内联脚本 (' + data.sources.inlineScripts.length + ')</div>';
+      html += '<div class="tree-sub" id="kf-inline-scripts"><div class="tree-sub-title" onclick="toggleSection(this)">内联脚本 (' + data.sources.inlineScripts.length + ') <span class="kf-tag-high">重点</span></div>';
       html += '<div class="tree-section-body">';
       data.sources.inlineScripts.forEach(function (s, i) {
         html += '<div class="tree-sub"><div class="tree-sub-title" onclick="toggleSection(this)"># ' + (i + 1) + ' (' + s.length.toLocaleString() + ' 字符 ' + (s.type || '') + ')</div>';
@@ -369,7 +510,7 @@ function renderDataTree(data) {
     }
 
     if (data.sources.jsonld && data.sources.jsonld.length > 0) {
-      html += '<div class="tree-sub"><div class="tree-sub-title" onclick="toggleSection(this)">JSON-LD / 结构化数据 (' + data.sources.jsonld.length + ')</div>';
+      html += '<div class="tree-sub" id="kf-jsonld"><div class="tree-sub-title" onclick="toggleSection(this)">JSON-LD / 结构化数据 (' + data.sources.jsonld.length + ') <span class="kf-tag-medium">重点</span></div>';
       html += '<div class="tree-section-body"><pre class="data-pre scroll-large">' + escHtml(JSON.stringify(data.sources.jsonld, null, 1)) + '</pre></div></div>';
     }
 
@@ -394,7 +535,7 @@ function renderDataTree(data) {
     }
 
     if (data.sources.sourceMaps && data.sources.sourceMaps.length > 0) {
-      html += '<div class="tree-sub"><div class="tree-sub-title" onclick="toggleSection(this)">Source Map (' + data.sources.sourceMaps.length + ')</div>';
+      html += '<div class="tree-sub" id="kf-sourcemaps"><div class="tree-sub-title" onclick="toggleSection(this)">Source Map (' + data.sources.sourceMaps.length + ') <span class="kf-tag-medium">重点</span></div>';
       html += '<div class="tree-section-body"><pre class="data-pre">' + escHtml(JSON.stringify(data.sources.sourceMaps, null, 1)) + '</pre></div></div>';
     }
 
@@ -412,14 +553,14 @@ function renderDataTree(data) {
     html += '<div class="tree-section-title" onclick="toggleSection(this)">Application（应用程序）</div>';
     html += '<div class="tree-section-body">';
 
-    html += '<div class="tree-sub"><div class="tree-sub-title" onclick="toggleSection(this)">localStorage (' + Object.keys(data.application.localStorage || {}).length + ' 项)</div>';
+    html += '<div class="tree-sub" id="kf-storage"><div class="tree-sub-title" onclick="toggleSection(this)">localStorage (' + Object.keys(data.application.localStorage || {}).length + ' 项) <span class="kf-tag-high">重点</span></div>';
     html += '<div class="tree-section-body">' + renderKV(data.application.localStorage) + '</div></div>';
 
     html += '<div class="tree-sub"><div class="tree-sub-title" onclick="toggleSection(this)">sessionStorage (' + Object.keys(data.application.sessionStorage || {}).length + ' 项)</div>';
     html += '<div class="tree-section-body">' + renderKV(data.application.sessionStorage) + '</div></div>';
 
     if (data.application.cookies) {
-      html += '<div class="tree-sub"><div class="tree-sub-title" onclick="toggleSection(this)">Cookies (非 HttpOnly)</div>';
+      html += '<div class="tree-sub" id="kf-cookies"><div class="tree-sub-title" onclick="toggleSection(this)">Cookies (非 HttpOnly) <span class="kf-tag-high">重点</span></div>';
       html += '<div class="tree-section-body"><pre class="data-pre">' + escHtml(data.application.cookies) + '</pre></div></div>';
     }
 
@@ -444,7 +585,7 @@ function renderDataTree(data) {
     }
 
     if (data.application.globalStates && Object.keys(data.application.globalStates).length > 0) {
-      html += '<div class="tree-sub"><div class="tree-sub-title" onclick="toggleSection(this)">全局状态 (' + Object.keys(data.application.globalStates).length + ')</div>';
+      html += '<div class="tree-sub" id="kf-global-states"><div class="tree-sub-title" onclick="toggleSection(this)">全局状态 (' + Object.keys(data.application.globalStates).length + ') <span class="kf-tag-high">重点</span></div>';
       html += '<div class="tree-section-body"><pre class="data-pre">' + escHtml(JSON.stringify(data.application.globalStates, null, 1)) + '</pre></div></div>';
     }
 
