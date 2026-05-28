@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <div class="header">
+    <h1>图片提取</h1>
+  </div>
+
+  <div class="page-info">
+    <span class="label">当前页面</span>
+    <span class="title" id="pageTitle">—</span>
+  </div>
+
+  <div class="actions">
+    <button id="extractBtn" class="btn-primary">提取图片</button>
+  </div>
+
+  <div class="content-area">
+    <div class="loading hidden" id="loading">
+      <div class="spinner"></div>
+      <span id="loadingText">正在滚动加载图片...</span>
+    </div>
+    <div class="error hidden" id="error"></div>
+
+    <div class="image-section hidden" id="imageSection">
+      <div class="image-toolbar">
+        <label class="check-all"><input type="checkbox" id="selectAll"> 全选</label>
+        <span class="select-count" id="selectCount">已选 0 张</span>
+        <button id="downloadSelected" class="btn-small btn-dl" disabled>下载选中</button>
+      </div>
+      <div class="image-grid" id="imageGrid"></div>
+      <div class="download-progress hidden" id="downloadProgress">
+        <span id="progressText">下载中...</span>
+        <div class="progress-bar"><div class="progress-fill" id="progressFill"></div></div>
+      </div>
+    </div>
+
+    <div class="image-preview hidden" id="imagePreview">
+      <button id="closePreview" class="close-btn">&times;</button>
+      <img id="previewImg" src="" alt="">
+      <div class="preview-info">
+        <span id="previewUrl"></span>
+        <button id="copyUrlBtn" class="btn-small">复制链接</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="footer">
+    <span id="statusText">就绪</span>
+  </div>
+
+  <script src="popup.js"></script>
+</body>
+</html>

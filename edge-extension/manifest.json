@@ -1,0 +1,11 @@
+{
+  "manifest_version": 3,
+  "name": "图片提取",
+  "version": "0.0.1",
+  "description": "一键提取网页中的所有图片，支持批量下载",
+  "permissions": ["storage", "activeTab", "scripting", "downloads"],
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "图片提取"
+  }
+}

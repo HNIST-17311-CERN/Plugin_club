@@ -1,0 +1,19 @@
+{
+  "name": "my-vscode-extension",
+  "displayName": "My VS Code Extension",
+  "version": "0.0.1",
+  "description": "一个简单的 VS Code 插件",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "activationEvents": [],
+  "main": "./extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "myExtension.helloWorld",
+        "title": "Hello World"
+      }
+    ]
+  }
+}
