@@ -1,5 +1,11 @@
+// --- DOM 引用 ---
 var els = {
+  // 公共
   pageTitle: document.getElementById('pageTitle'),
+  statusText: document.getElementById('statusText'),
+  // 标签
+  tabBtns: document.querySelectorAll('.tab-btn'),
+  // 图片
   extractBtn: document.getElementById('extractBtn'),
   loading: document.getElementById('loading'),
   loadingText: document.getElementById('loadingText'),
@@ -17,14 +23,35 @@ var els = {
   previewUrl: document.getElementById('previewUrl'),
   closePreview: document.getElementById('closePreview'),
   copyUrlBtn: document.getElementById('copyUrlBtn'),
-  statusText: document.getElementById('statusText')
+  // 数据
+  extractDataBtn: document.getElementById('extractDataBtn'),
+  dataLoading: document.getElementById('dataLoading'),
+  dataLoadingText: document.getElementById('dataLoadingText'),
+  dataError: document.getElementById('dataError'),
+  dataSection: document.getElementById('dataSection'),
+  dataSummary: document.getElementById('dataSummary'),
+  exportDataBtn: document.getElementById('exportDataBtn'),
+  dataTree: document.getElementById('dataTree')
 };
 
 var pageImages = [];
 var selectedImages = {};
 var currentTabId = null;
 var pageTitle = '';
+var pageData = null; // 存储提取的全量数据
 
+// --- 标签切换 ---
+els.tabBtns.forEach(function (btn) {
+  btn.addEventListener('click', function () {
+    var tab = this.getAttribute('data-tab');
+    els.tabBtns.forEach(function (b) { b.classList.remove('active'); });
+    this.classList.add('active');
+    document.querySelectorAll('.tab-content').forEach(function (c) { c.classList.remove('active'); });
+    document.getElementById('tab-' + tab).classList.add('active');
+  });
+});
+
+// --- 初始化 ---
 async function init() {
   try {
     var tabs = await chrome.tabs.query({ active: true, currentWindow: true });
@@ -35,6 +62,7 @@ async function init() {
     if (tab.url && (tab.url.startsWith('chrome://') || tab.url.startsWith('edge://') || tab.url.startsWith('about:'))) {
       setStatus('无法在此类页面上使用');
       els.extractBtn.disabled = true;
+      els.extractDataBtn.disabled = true;
       return;
     }
 
@@ -44,10 +72,13 @@ async function init() {
   } catch (err) {
     setStatus('无法访问此页面，请刷新后重试');
     els.extractBtn.disabled = true;
+    els.extractDataBtn.disabled = true;
   }
 }
 
-// --- 提取图片 ---
+// =========================================================================
+// 图片提取
+// =========================================================================
 els.extractBtn.addEventListener('click', async function () {
   if (!currentTabId) return;
   els.extractBtn.disabled = true;
@@ -75,7 +106,7 @@ els.extractBtn.addEventListener('click', async function () {
     setStatus('找到 ' + pageImages.length + ' 张图片');
   } catch (err) {
     els.loading.classList.add('hidden');
-    showError('提取失败: ' + (err.message || '未知错误'));
+    showError(els.error, '提取失败: ' + (err.message || '未知错误'));
     setStatus('失败');
   } finally {
     els.extractBtn.disabled = false;
@@ -158,10 +189,8 @@ async function startDownload(images) {
     try {
       await new Promise(function (resolve) {
         chrome.downloads.download({
-          url: img.src,
-          filename: dlFolder + '/' + dlTitle + '/' + filename,
-          saveAs: false,
-          conflictAction: 'uniquify'
+          url: img.src, filename: dlFolder + '/' + dlTitle + '/' + filename,
+          saveAs: false, conflictAction: 'uniquify'
         }, function () {
           if (chrome.runtime.lastError) { failed++; } else { done++; }
           resolve();
@@ -183,29 +212,319 @@ async function startDownload(images) {
 // --- 图片预览 ---
 els.closePreview.addEventListener('click', function () { els.imagePreview.classList.add('hidden'); els.previewImg.src = ''; });
 els.copyUrlBtn.addEventListener('click', function () {
-  var url = els.previewUrl.textContent;
-  navigator.clipboard.writeText(url).then(function () {
-    els.copyUrlBtn.textContent = '已复制!';
-    setTimeout(function () { els.copyUrlBtn.textContent = '复制链接'; }, 1500);
-  }).catch(function () {
-    var ta = document.createElement('textarea'); ta.value = url; document.body.appendChild(ta); ta.select(); document.execCommand('copy'); document.body.removeChild(ta);
-    els.copyUrlBtn.textContent = '已复制!';
-    setTimeout(function () { els.copyUrlBtn.textContent = '复制链接'; }, 1500);
-  });
+  copyText(els.previewUrl.textContent, els.copyUrlBtn, '复制链接');
 });
 
-// --- 辅助 ---
-function showError(msg) { els.error.textContent = msg; els.error.classList.remove('hidden'); }
-function setStatus(text) { els.statusText.textContent = text; }
-function escHtml(s) { return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;'); }
-function escAttr(s) { return s.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); }
-function sanitizeFilename(name) { return name.replace(/[<>:"/\\|?*\x00-\x1f]/g, '').replace(/\s+/g, ' ').trim(); }
-function getFilename(url, index) {
+// =========================================================================
+// 数据提取
+// =========================================================================
+els.extractDataBtn.addEventListener('click', async function () {
+  if (!currentTabId) return;
+  els.extractDataBtn.disabled = true;
+  els.dataError.classList.add('hidden');
+  els.dataSection.classList.add('hidden');
+  els.dataLoading.classList.remove('hidden');
+  els.dataLoadingText.textContent = '正在提取页面数据...';
+  setStatus('提取数据中...');
+
   try {
-    var pathname = new URL(url).pathname; var name = pathname.split('/').pop();
+    var results = await chrome.scripting.executeScript({ target: { tabId: currentTabId }, files: ['extract.js'] });
+    els.dataLoading.classList.add('hidden');
+    pageData = (results && results[0] && results[0].result) || {};
+
+    if (!pageData || !pageData.pageInfo) {
+      var debugInfo = '';
+      if (pageData && pageData._debug) {
+        var dbg = pageData._debug;
+        debugInfo = '\n\n--- Debug ---\nSteps: ' + (dbg.steps || []).join(', ') +
+          '\nErrors: ' + (dbg.errors || []).join('; ') +
+          '\nFatal: ' + (dbg.fatal ? dbg.fatal.message + '\n' + dbg.fatal.stack : 'none') +
+          '\nStep at crash: ' + (dbg.fatal ? dbg.fatal.step : 'N/A');
+      } else {
+        debugInfo = '\n\npageData keys: ' + JSON.stringify(pageData ? Object.keys(pageData) : 'null') +
+          '\nraw result: ' + JSON.stringify(results);
+      }
+      showError(els.dataError, '数据提取失败，请刷新页面重试' + debugInfo);
+      setStatus('失败');
+    } else {
+      renderDataTree(pageData);
+      els.dataSection.classList.remove('hidden');
+      var summary = [];
+      if (pageData.elements) {
+        summary.push('元素 ' + (pageData.elements.totalElements || 0) + ' 个');
+        summary.push('图片 ' + (pageData.elements.images ? pageData.elements.images.length : 0) + ' 张');
+        summary.push('表单 ' + (pageData.elements.forms ? pageData.elements.forms.length : 0) + ' 个');
+      }
+      if (pageData.sources) {
+        summary.push('脚本 ' + ((pageData.sources.inlineScripts ? pageData.sources.inlineScripts.length : 0) + (pageData.sources.externalScripts ? pageData.sources.externalScripts.length : 0)) + ' 个');
+        summary.push('样式 ' + ((pageData.sources.inlineStyles ? pageData.sources.inlineStyles.length : 0) + (pageData.sources.externalStyles ? pageData.sources.externalStyles.length : 0)) + ' 个');
+      }
+      if (pageData.application) {
+        summary.push('LS ' + Object.keys(pageData.application.localStorage || {}).length + ' 项');
+        summary.push('IDB ' + (pageData.application.indexedDB ? pageData.application.indexedDB.length : 0) + ' 库');
+      }
+      els.dataSummary.textContent = summary.join('  |  ');
+      setStatus('数据提取完成');
+    }
+  } catch (err) {
+    els.dataLoading.classList.add('hidden');
+    showError(els.dataError, '提取失败: ' + (err.message || '未知错误'));
+    setStatus('失败');
+  } finally {
+    els.extractDataBtn.disabled = false;
+  }
+});
+
+function renderDataTree(data) {
+  var html = '';
+
+  // --- Page Info ---
+  html += '<div class="tree-section">';
+  html += '<div class="tree-section-title" onclick="toggleSection(this)">页面信息</div>';
+  html += '<div class="tree-section-body">';
+  html += renderKV(data.pageInfo);
+  html += '</div></div>';
+
+  // --- Elements ---
+  if (data.elements) {
+    html += '<div class="tree-section">';
+    html += '<div class="tree-section-title" onclick="toggleSection(this)">Elements（元素）</div>';
+    html += '<div class="tree-section-body">';
+
+    if (data.elements.meta) {
+      html += '<div class="tree-sub"><div class="tree-sub-title" onclick="toggleSection(this)">Meta 标签 (' + Object.keys(data.elements.meta).length + ')</div>';
+      html += '<div class="tree-section-body">' + renderKV(data.elements.meta) + '</div></div>';
+    }
+
+    html += '<div class="tree-sub"><div class="tree-sub-title" onclick="toggleSection(this)">标签统计 (' + (data.elements.totalElements || 0) + ' 个元素)</div>';
+    html += '<div class="tree-section-body">' + renderKV(data.elements.tagCounts) + '</div></div>';
+
+    if (data.elements.idCount) {
+      html += '<div class="tree-sub"><div class="tree-sub-title" onclick="toggleSection(this)">ID 映射 (' + data.elements.idCount + ' 个)</div>';
+      html += '<div class="tree-section-body"><pre class="data-pre">' + escHtml(JSON.stringify(data.elements.idMap, null, 1)) + '</pre></div></div>';
+    }
+
+    if (data.elements.forms && data.elements.forms.length > 0) {
+      html += '<div class="tree-sub"><div class="tree-sub-title" onclick="toggleSection(this)">表单 (' + data.elements.forms.length + ')</div>';
+      html += '<div class="tree-section-body"><pre class="data-pre">' + escHtml(JSON.stringify(data.elements.forms, null, 1)) + '</pre></div></div>';
+    }
+
+    if (data.elements.links && data.elements.links.length > 0) {
+      html += '<div class="tree-sub"><div class="tree-sub-title" onclick="toggleSection(this)">Link 标签 (' + data.elements.links.length + ')</div>';
+      html += '<div class="tree-section-body"><pre class="data-pre">' + escHtml(JSON.stringify(data.elements.links, null, 1)) + '</pre></div></div>';
+    }
+
+    if (data.elements.images && data.elements.images.length > 0) {
+      html += '<div class="tree-sub"><div class="tree-sub-title" onclick="toggleSection(this)">图片 (' + data.elements.images.length + ')</div>';
+      html += '<div class="tree-section-body"><pre class="data-pre">' + escHtml(JSON.stringify(data.elements.images.slice(0, 200), null, 1)) + '</pre></div></div>';
+    }
+
+    if (data.elements.media && data.elements.media.length > 0) {
+      html += '<div class="tree-sub"><div class="tree-sub-title" onclick="toggleSection(this)">媒体 (' + data.elements.media.length + ')</div>';
+      html += '<div class="tree-section-body"><pre class="data-pre">' + escHtml(JSON.stringify(data.elements.media, null, 1)) + '</pre></div></div>';
+    }
+
+    if (data.elements.canvases && data.elements.canvases.length > 0) {
+      html += '<div class="tree-sub"><div class="tree-sub-title" onclick="toggleSection(this)">Canvas (' + data.elements.canvases.length + ')</div>';
+      html += '<div class="tree-section-body"><pre class="data-pre">' + escHtml(JSON.stringify(data.elements.canvases, null, 1)) + '</pre></div></div>';
+    }
+
+    if (data.elements.frames && data.elements.frames.length > 0) {
+      html += '<div class="tree-sub"><div class="tree-sub-title" onclick="toggleSection(this)">iframe (' + data.elements.frames.length + ')</div>';
+      html += '<div class="tree-section-body"><pre class="data-pre">' + escHtml(JSON.stringify(data.elements.frames, null, 1)) + '</pre></div></div>';
+    }
+
+    if (data.elements.dataAttributes && Object.keys(data.elements.dataAttributes).length > 0) {
+      html += '<div class="tree-sub"><div class="tree-sub-title" onclick="toggleSection(this)">data-* 属性</div>';
+      html += '<div class="tree-section-body"><pre class="data-pre">' + escHtml(JSON.stringify(data.elements.dataAttributes, null, 1)) + '</pre></div></div>';
+    }
+
+    if (data.elements.documentHTML) {
+      html += '<div class="tree-sub"><div class="tree-sub-title" onclick="toggleSection(this)">完整 HTML (' + data.elements.documentHTML.length.toLocaleString() + ' 字符)</div>';
+      html += '<div class="tree-section-body"><pre class="data-pre scroll-large">' + escHtml(data.elements.documentHTML) + '</pre></div></div>';
+    }
+
+    html += '</div></div>';
+  }
+
+  // --- Sources ---
+  if (data.sources) {
+    html += '<div class="tree-section">';
+    html += '<div class="tree-section-title" onclick="toggleSection(this)">Sources（源代码）</div>';
+    html += '<div class="tree-section-body">';
+
+    if (data.sources.inlineScripts && data.sources.inlineScripts.length > 0) {
+      html += '<div class="tree-sub"><div class="tree-sub-title" onclick="toggleSection(this)">内联脚本 (' + data.sources.inlineScripts.length + ')</div>';
+      html += '<div class="tree-section-body">';
+      data.sources.inlineScripts.forEach(function (s, i) {
+        html += '<div class="tree-sub"><div class="tree-sub-title" onclick="toggleSection(this)"># ' + (i + 1) + ' (' + s.length.toLocaleString() + ' 字符 ' + (s.type || '') + ')</div>';
+        html += '<div class="tree-section-body"><pre class="data-pre scroll-large">' + escHtml(s.code) + '</pre></div></div>';
+      });
+      html += '</div></div>';
+    }
+
+    if (data.sources.externalScripts && data.sources.externalScripts.length > 0) {
+      html += '<div class="tree-sub"><div class="tree-sub-title" onclick="toggleSection(this)">外链脚本 (' + data.sources.externalScripts.length + ')</div>';
+      html += '<div class="tree-section-body"><pre class="data-pre">' + escHtml(JSON.stringify(data.sources.externalScripts, null, 1)) + '</pre></div></div>';
+    }
+
+    if (data.sources.jsonld && data.sources.jsonld.length > 0) {
+      html += '<div class="tree-sub"><div class="tree-sub-title" onclick="toggleSection(this)">JSON-LD / 结构化数据 (' + data.sources.jsonld.length + ')</div>';
+      html += '<div class="tree-section-body"><pre class="data-pre scroll-large">' + escHtml(JSON.stringify(data.sources.jsonld, null, 1)) + '</pre></div></div>';
+    }
+
+    if (data.sources.inlineStyles && data.sources.inlineStyles.length > 0) {
+      html += '<div class="tree-sub"><div class="tree-sub-title" onclick="toggleSection(this)">内联样式 (' + data.sources.inlineStyles.length + ')</div>';
+      html += '<div class="tree-section-body">';
+      data.sources.inlineStyles.forEach(function (s, i) {
+        html += '<div class="tree-sub"><div class="tree-sub-title" onclick="toggleSection(this)"># ' + (i + 1) + ' (' + s.length.toLocaleString() + ' 字符)</div>';
+        html += '<div class="tree-section-body"><pre class="data-pre scroll-large">' + escHtml(s.text) + '</pre></div></div>';
+      });
+      html += '</div></div>';
+    }
+
+    if (data.sources.externalStyles && data.sources.externalStyles.length > 0) {
+      html += '<div class="tree-sub"><div class="tree-sub-title" onclick="toggleSection(this)">外链样式 (' + data.sources.externalStyles.length + ')</div>';
+      html += '<div class="tree-section-body"><pre class="data-pre">' + escHtml(JSON.stringify(data.sources.externalStyles, null, 1)) + '</pre></div></div>';
+    }
+
+    if (data.sources.cssRules && data.sources.cssRules.length > 0) {
+      html += '<div class="tree-sub"><div class="tree-sub-title" onclick="toggleSection(this)">CSS 规则 (' + data.sources.cssRules.length + ' 个样式表)</div>';
+      html += '<div class="tree-section-body"><pre class="data-pre">' + escHtml(JSON.stringify(data.sources.cssRules.map(function (r) { return { href: r.href, ruleCount: r.ruleCount, error: r.error }; }), null, 1)) + '</pre></div></div>';
+    }
+
+    if (data.sources.sourceMaps && data.sources.sourceMaps.length > 0) {
+      html += '<div class="tree-sub"><div class="tree-sub-title" onclick="toggleSection(this)">Source Map (' + data.sources.sourceMaps.length + ')</div>';
+      html += '<div class="tree-section-body"><pre class="data-pre">' + escHtml(JSON.stringify(data.sources.sourceMaps, null, 1)) + '</pre></div></div>';
+    }
+
+    if (data.sources.resourceURLs) {
+      html += '<div class="tree-sub"><div class="tree-sub-title" onclick="toggleSection(this)">资源 URL 汇总</div>';
+      html += '<div class="tree-section-body"><pre class="data-pre">' + escHtml(JSON.stringify(data.sources.resourceURLs, null, 1)) + '</pre></div></div>';
+    }
+
+    html += '</div></div>';
+  }
+
+  // --- Application ---
+  if (data.application) {
+    html += '<div class="tree-section">';
+    html += '<div class="tree-section-title" onclick="toggleSection(this)">Application（应用程序）</div>';
+    html += '<div class="tree-section-body">';
+
+    html += '<div class="tree-sub"><div class="tree-sub-title" onclick="toggleSection(this)">localStorage (' + Object.keys(data.application.localStorage || {}).length + ' 项)</div>';
+    html += '<div class="tree-section-body">' + renderKV(data.application.localStorage) + '</div></div>';
+
+    html += '<div class="tree-sub"><div class="tree-sub-title" onclick="toggleSection(this)">sessionStorage (' + Object.keys(data.application.sessionStorage || {}).length + ' 项)</div>';
+    html += '<div class="tree-section-body">' + renderKV(data.application.sessionStorage) + '</div></div>';
+
+    if (data.application.cookies) {
+      html += '<div class="tree-sub"><div class="tree-sub-title" onclick="toggleSection(this)">Cookies (非 HttpOnly)</div>';
+      html += '<div class="tree-section-body"><pre class="data-pre">' + escHtml(data.application.cookies) + '</pre></div></div>';
+    }
+
+    if (data.application.indexedDB && data.application.indexedDB.length > 0) {
+      html += '<div class="tree-sub"><div class="tree-sub-title" onclick="toggleSection(this)">IndexedDB (' + data.application.indexedDB.length + ' 个数据库)</div>';
+      html += '<div class="tree-section-body"><pre class="data-pre">' + escHtml(JSON.stringify(data.application.indexedDB, null, 1)) + '</pre></div></div>';
+    }
+
+    if (data.application.cacheStorage && data.application.cacheStorage.length > 0) {
+      html += '<div class="tree-sub"><div class="tree-sub-title" onclick="toggleSection(this)">Cache Storage (' + data.application.cacheStorage.length + ')</div>';
+      html += '<div class="tree-section-body"><pre class="data-pre">' + escHtml(JSON.stringify(data.application.cacheStorage, null, 1)) + '</pre></div></div>';
+    }
+
+    if (data.application.serviceWorkers && data.application.serviceWorkers.length > 0) {
+      html += '<div class="tree-sub"><div class="tree-sub-title" onclick="toggleSection(this)">Service Worker (' + data.application.serviceWorkers.length + ')</div>';
+      html += '<div class="tree-section-body"><pre class="data-pre">' + escHtml(JSON.stringify(data.application.serviceWorkers, null, 1)) + '</pre></div></div>';
+    }
+
+    if (data.application.manifestURL || data.application.manifestData) {
+      html += '<div class="tree-sub"><div class="tree-sub-title" onclick="toggleSection(this)">PWA Manifest</div>';
+      html += '<div class="tree-section-body"><pre class="data-pre">' + escHtml(JSON.stringify({ url: data.application.manifestURL, data: data.application.manifestData }, null, 1)) + '</pre></div></div>';
+    }
+
+    if (data.application.globalStates && Object.keys(data.application.globalStates).length > 0) {
+      html += '<div class="tree-sub"><div class="tree-sub-title" onclick="toggleSection(this)">全局状态 (' + Object.keys(data.application.globalStates).length + ')</div>';
+      html += '<div class="tree-section-body"><pre class="data-pre">' + escHtml(JSON.stringify(data.application.globalStates, null, 1)) + '</pre></div></div>';
+    }
+
+    if (data.application.windowKeys && Array.isArray(data.application.windowKeys) && data.application.windowKeys.length > 0) {
+      html += '<div class="tree-sub"><div class="tree-sub-title" onclick="toggleSection(this)">window 自定义属性 (' + data.application.windowKeys.length + ')</div>';
+      html += '<div class="tree-section-body"><pre class="data-pre">' + escHtml(data.application.windowKeys.join(', ')) + '</pre></div></div>';
+    }
+
+    html += '</div></div>';
+  }
+
+  els.dataTree.innerHTML = html;
+}
+
+// 简单的键值对渲染
+function renderKV(obj) {
+  if (!obj || Object.keys(obj).length === 0) return '<div class="data-empty">(无数据)</div>';
+  var rows = '';
+  Object.keys(obj).forEach(function (k) {
+    var v = obj[k];
+    if (typeof v === 'string') {
+      if (v.length > 500) v = v.substring(0, 500) + '...';
+    } else if (typeof v === 'object') {
+      v = JSON.stringify(v, null, 1);
+      if (v.length > 500) v = v.substring(0, 500) + '...';
+    }
+    rows += '<tr><td class="kv-key">' + escHtml(k) + '</td><td class="kv-val">' + escHtml(String(v)) + '</td></tr>';
+  });
+  return '<table class="kv-table">' + rows + '</table>';
+}
+
+// 折叠/展开
+function toggleSection(el) {
+  var body = el.nextElementSibling;
+  if (body) {
+    body.classList.toggle('collapsed');
+    el.classList.toggle('collapsed');
+  }
+}
+
+// --- 导出 ---
+els.exportDataBtn.addEventListener('click', function () {
+  if (!pageData) return;
+  var json = JSON.stringify(pageData, null, 2);
+  var blob = new Blob([json], { type: 'application/json' });
+  var url = URL.createObjectURL(blob);
+  chrome.downloads.download({
+    url: url,
+    filename: 'pageData_' + sanitizeFilename(pageTitle).substring(0, 40) + '.json',
+    saveAs: true
+  }, function () { setTimeout(function () { URL.revokeObjectURL(url); }, 2000); });
+  setStatus('JSON 导出中...');
+});
+
+// =========================================================================
+// 辅助
+// =========================================================================
+function showError(target, msg) { target.textContent = msg; target.classList.remove('hidden'); }
+function setStatus(text) { els.statusText.textContent = text; }
+function escHtml(s) { return (s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;'); }
+function escAttr(s) { return (s || '').replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); }
+function sanitizeFilename(name) { return (name || '').replace(/[<>:"/\\|?*\x00-\x1f]/g, '').replace(/\s+/g, ' ').trim(); }
+function getFilename(url, index) {
+  try { var pathname = new URL(url).pathname; var name = pathname.split('/').pop();
     if (name && name.length > 0 && name.length < 120 && /\.(jpg|jpeg|png|gif|webp|svg|bmp|ico|tiff)/i.test(name)) { return sanitizeFilename(name); }
   } catch (_) {}
   return 'image_' + (index + 1) + '.jpg';
 }
+function copyText(text, btn, originalLabel) {
+  navigator.clipboard.writeText(text).then(function () {
+    btn.textContent = '已复制!';
+    setTimeout(function () { btn.textContent = originalLabel; }, 1500);
+  }).catch(function () {
+    var ta = document.createElement('textarea'); ta.value = text; document.body.appendChild(ta); ta.select(); document.execCommand('copy'); document.body.removeChild(ta);
+    btn.textContent = '已复制!';
+    setTimeout(function () { btn.textContent = originalLabel; }, 1500);
+  });
+}
+
+// 挂到 window 供内联 onclick 调用
+window.toggleSection = toggleSection;
 
 init();

@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
-  "name": "图片提取",
-  "version": "0.0.1",
-  "description": "一键提取网页中的所有图片，支持批量下载",
+  "name": "页面数据提取",
+  "version": "0.0.2",
+  "description": "提取网页图片、DOM数据、源码和存储信息",
   "permissions": ["storage", "activeTab", "scripting", "downloads"],
   "action": {
     "default_popup": "popup.html",
