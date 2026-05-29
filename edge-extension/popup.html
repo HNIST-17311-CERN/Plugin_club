@@ -6,7 +6,8 @@
 </head>
 <body>
   <div class="header">
-    <h1>图片提取</h1>
+    <h1>页面数据提取</h1>
+    <button id="configBtn" class="config-btn" title="配置">&#9881;</button>
   </div>
 
   <div class="page-info">
@@ -14,9 +15,18 @@
     <span class="title" id="pageTitle">—</span>
   </div>
 
+  <div class="config-panel hidden" id="configPanel">
+    <div class="config-row">
+      <label>DeepSeek API Key</label>
+      <input id="dsKey" class="apikey-input" type="password" placeholder="sk-...">
+    </div>
+    <div class="config-hint">Key 保存在本地，仅用于 AI 分析网络请求</div>
+  </div>
+
   <div class="tab-bar" id="tabBar">
     <button class="tab-btn active" data-tab="images">图片</button>
     <button class="tab-btn" data-tab="data">数据</button>
+    <button class="tab-btn" data-tab="network">网络</button>
   </div>
 
   <!-- ====== 图片 Tab ====== -->
@@ -49,6 +59,28 @@
           <span id="previewUrl"></span>
           <button id="copyUrlBtn" class="btn-small">复制链接</button>
         </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ====== 网络 Tab ====== -->
+  <div class="tab-content" id="tab-network">
+    <div class="actions">
+      <button id="netRefreshBtn" class="btn-primary">刷新并抓取</button>
+      <button id="netAiBtn" class="btn-primary btn-ai">AI 一键分析</button>
+    </div>
+    <div class="actions" style="padding-top:0">
+      <button id="netFetchBtn" class="btn-outline">查看结果</button>
+      <button id="netExportBtn" class="btn-small btn-dl hidden">导出 JSON</button>
+    </div>
+    <div class="net-hint">先刷新并抓取，再查看结果或AI一键分析</div>
+    <div class="content-area">
+      <div class="net-status hidden" id="netStatus"></div>
+      <div class="net-list hidden" id="netList"></div>
+      <div class="net-ai hidden" id="netAi"></div>
+      <div class="net-detail hidden" id="netDetail">
+        <button id="netBackBtn" class="btn-small">← 返回</button>
+        <div class="net-detail-content" id="netDetailContent"></div>
       </div>
     </div>
   </div>

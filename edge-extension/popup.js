@@ -3,6 +3,10 @@ var els = {
   // 公共
   pageTitle: document.getElementById('pageTitle'),
   statusText: document.getElementById('statusText'),
+  // 配置
+  configBtn: document.getElementById('configBtn'),
+  configPanel: document.getElementById('configPanel'),
+  dsKey: document.getElementById('dsKey'),
   // 标签
   tabBtns: document.querySelectorAll('.tab-btn'),
   // 图片
@@ -23,6 +27,17 @@ var els = {
   previewUrl: document.getElementById('previewUrl'),
   closePreview: document.getElementById('closePreview'),
   copyUrlBtn: document.getElementById('copyUrlBtn'),
+  // 网络
+  netRefreshBtn: document.getElementById('netRefreshBtn'),
+  netFetchBtn: document.getElementById('netFetchBtn'),
+  netAiBtn: document.getElementById('netAiBtn'),
+  netExportBtn: document.getElementById('netExportBtn'),
+  netAi: document.getElementById('netAi'),
+  netStatus: document.getElementById('netStatus'),
+  netList: document.getElementById('netList'),
+  netDetail: document.getElementById('netDetail'),
+  netBackBtn: document.getElementById('netBackBtn'),
+  netDetailContent: document.getElementById('netDetailContent'),
   // 数据
   extractDataBtn: document.getElementById('extractDataBtn'),
   dataLoading: document.getElementById('dataLoading'),
@@ -52,6 +67,19 @@ els.tabBtns.forEach(function (btn) {
     document.querySelectorAll('.tab-content').forEach(function (c) { c.classList.remove('active'); });
     document.getElementById('tab-' + tab).classList.add('active');
   });
+});
+
+// 配置面板开关
+els.configBtn.addEventListener('click', function () {
+  els.configPanel.classList.toggle('hidden');
+});
+
+// 加载保存的 API Key（放在 init 之前即可，init 里不涉及它）
+chrome.storage.local.get('ds_api_key', function (r) {
+  if (r.ds_api_key) els.dsKey.value = r.ds_api_key;
+});
+els.dsKey.addEventListener('input', function () {
+  chrome.storage.local.set({ ds_api_key: this.value.trim() });
 });
 
 // --- 初始化 ---
@@ -667,5 +695,212 @@ function copyText(text, btn, originalLabel) {
 
 // 挂到 window 供内联 onclick 调用
 window.toggleSection = toggleSection;
+
+// =========================================================================
+// =========================================================================
+// =========================================================================
+// 网络捕获 — webRequest + background SW
+// =========================================================================
+var netCached = null;
+
+async function readNetFromBg() {
+  try {
+    var resp = await chrome.runtime.sendMessage({ type: 'GET_NET' });
+    if (resp && resp.ok) {
+      netCached = resp;
+      return resp;
+    }
+  } catch (e) {}
+  return null;
+}
+
+// 刷新并抓取
+els.netRefreshBtn.addEventListener('click', async function () {
+  if (!currentTabId) return;
+  els.netRefreshBtn.disabled = true;
+  els.netRefreshBtn.textContent = '刷新中...';
+  setStatus('清空+刷新...');
+  try {
+    await chrome.runtime.sendMessage({ type: 'CLEAR_NET' });
+    netCached = null;
+    await chrome.tabs.reload(currentTabId);
+  } catch (e) {
+    setStatus('失败: ' + e.message);
+  }
+  // popup closes here because page refreshes
+  els.netRefreshBtn.disabled = false;
+  els.netRefreshBtn.textContent = '刷新并抓取';
+});
+
+// 查看结果
+els.netFetchBtn.addEventListener('click', async function () {
+  els.netFetchBtn.disabled = true;
+  els.netFetchBtn.textContent = '读取中...';
+  setStatus('读取SW数据...');
+
+  var data = netCached || await readNetFromBg();
+  els.netFetchBtn.disabled = false;
+  els.netFetchBtn.textContent = '查看结果';
+
+  if (!data || !data.all || !data.all.length) {
+    els.netStatus.classList.remove('hidden');
+    els.netStatus.innerHTML = '暂无数据。<br><small>先点刷新并抓取，页面加载后再点查看结果。<br>如果SW不工作：edge://extensions/ 检查扩展是否启用、权限是否授权。</small>';
+    els.netList.classList.add('hidden');
+    setStatus('无数据');
+    return;
+  }
+
+  var all = data.all;
+  var xhr = all.filter(function (r) { return r.type === 'xmlhttprequest' || r.type === 'fetch'; });
+  var doc = all.filter(function (r) { return r.type === 'main_frame' || r.type === 'sub_frame'; });
+  var js = all.filter(function (r) { return r.type === 'script'; });
+
+  els.netStatus.classList.add('hidden');
+  var html = '<div class="net-info">总计 ' + all.length + ' | Fetch/XHR: ' + xhr.length + ' | JS: ' + js.length + ' | Doc: ' + doc.length + '</div>';
+
+  if (xhr.length > 0) {
+    html += '<div class="net-group-title">Fetch/XHR (' + xhr.length + ')</div><div class="net-req-list">';
+    xhr.forEach(function (r, i) {
+      var mc = r.method === 'GET' ? 'net-get' : (r.method === 'POST' ? 'net-post' : 'net-other');
+      var sc = r.statusCode >= 400 ? 'net-err' : 'net-ok';
+      var us = (r.url || '').replace(/^https?:\/\/[^\/]+/, '').substring(0, 55);
+      html += '<div class="net-req-row" onclick="showXhrDetail(' + i + ')">';
+      html += '<span class="net-method ' + mc + '">' + r.method + '</span>';
+      html += '<span class="net-status ' + sc + '">' + (r.statusCode || '?') + '</span>';
+      html += '<span class="net-url">' + escHtml(us) + '</span></div>';
+    });
+    html += '</div>';
+  }
+
+  html += '<div class="net-group-title">所有请求 (' + all.length + ')</div><div class="net-req-list">';
+  all.slice(-100).forEach(function (r) {
+    var us = (r.url || '').replace(/^https?:\/\/[^\/]+/, '').substring(0, 50);
+    html += '<div class="net-req-row" style="font-size:10px">';
+    html += '<span class="net-method net-other" style="font-size:9px">' + (r.type || '?') + '</span>';
+    html += '<span class="net-status">' + (r.statusCode || '-') + '</span>';
+    html += '<span class="net-url">' + escHtml(us) + '</span></div>';
+  });
+  html += '</div>';
+
+  els.netList.innerHTML = html;
+  els.netList.classList.remove('hidden');
+  els.netExportBtn.classList.remove('hidden');
+  setStatus(all.length + ' 请求');
+});
+
+// 导出 JSON
+els.netExportBtn.addEventListener('click', function () {
+  if (!netCached || !netCached.all) return;
+  var json = JSON.stringify(netCached.all, null, 2);
+  var blob = new Blob([json], { type: 'application/json' });
+  var url = URL.createObjectURL(blob);
+  chrome.downloads.download({
+    url: url,
+    filename: 'network_' + sanitizeFilename(pageTitle).substring(0, 30) + '_' + Date.now() + '.json',
+    saveAs: true
+  }, function () { setTimeout(function () { URL.revokeObjectURL(url); }, 2000); });
+  setStatus('导出中...');
+});
+
+// API Key 持久化
+chrome.storage.local.get('ds_api_key', function (r) {
+  if (r.ds_api_key) els.dsKey.value = r.ds_api_key;
+});
+els.dsKey.addEventListener('input', function () {
+  chrome.storage.local.set({ ds_api_key: this.value.trim() });
+});
+
+// AI 分析
+els.netAiBtn.addEventListener('click', async function () {
+  var key = els.dsKey.value.trim();
+  if (!key) { setStatus('请先输入 DeepSeek API Key'); return; }
+  if (!netCached || !netCached.all || !netCached.all.length) { setStatus('先查看结果再分析'); return; }
+
+  els.netAiBtn.disabled = true;
+  els.netAiBtn.textContent = '分析中...';
+  setStatus('AI 分析中...');
+
+  // 压缩请求数据：只保留关键字段
+  var xhrReqs = netCached.all.filter(function (r) { return r.type === 'xmlhttprequest' || r.type === 'fetch'; });
+  var allReqs = netCached.all;
+
+  var summary = '共捕获 ' + netCached.all.length + ' 个请求，其中 API 请求 ' + xhrReqs.length + ' 个。\n\n';
+  summary += '=== API 请求列表 ===\n';
+  xhrReqs.forEach(function (r, i) {
+    summary += (i + 1) + '. [' + r.method + '] ' + r.url + ' → ' + (r.statusCode || '?') + '\n';
+  });
+  if (allReqs.filter(function (r) { return r.type === 'script'; }).length > 0) {
+    summary += '\n=== JS 文件 ===\n';
+    allReqs.filter(function (r) { return r.type === 'script'; }).forEach(function (r, i) {
+      summary += (i + 1) + '. ' + r.url + '\n';
+    });
+  }
+
+  var prompt = '你是逆向工程专家。分析以下网页抓取的网络请求数据，输出：\n' +
+    '1. API 接口清单（URL、方法、用途推断）\n' +
+    '2. 认证方式（Token、Cookie、签名等）\n' +
+    '3. 可疑的加密/签名参数\n' +
+    '4. JS 文件中可能包含重要逻辑的文件\n' +
+    '5. 逆向建议（优先分析哪些接口、可能的安全机制）\n\n' + summary;
+
+  try {
+    var resp = await fetch('https://api.deepseek.com/chat/completions', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + key },
+      body: JSON.stringify({
+        model: 'deepseek-chat',
+        messages: [
+          { role: 'system', content: '你是逆向工程专家，擅长分析网络请求数据。用中文回答，简洁精准。' },
+          { role: 'user', content: prompt }
+        ],
+        max_tokens: 3000
+      })
+    });
+    var json = await resp.json();
+    els.netAiBtn.disabled = false;
+    els.netAiBtn.textContent = 'AI 分析';
+
+    var text = '';
+    if (json.choices && json.choices[0]) {
+      text = json.choices[0].message.content;
+    } else if (json.error) {
+      text = 'API 错误: ' + json.error.message;
+    } else {
+      text = '未知响应: ' + JSON.stringify(json).substring(0, 500);
+    }
+
+    els.netAi.classList.remove('hidden');
+    els.netAi.innerHTML = '<div class="ai-result"><div class="ai-title">AI 分析结果</div><div class="ai-body">' + escHtml(text).replace(/\n/g, '<br>') + '</div></div>';
+    setStatus('AI 分析完成');
+  } catch (e) {
+    els.netAiBtn.disabled = false;
+    els.netAiBtn.textContent = 'AI 分析';
+    setStatus('请求失败: ' + e.message);
+  }
+});
+
+// 请求详情
+window.showXhrDetail = function (index) {
+  var all = netCached ? netCached.all : [];
+  var xhr = all.filter(function (x) { return x.type === 'xmlhttprequest' || x.type === 'fetch'; });
+  var r = xhr[index];
+  if (!r) return;
+  els.netList.classList.add('hidden');
+  els.netDetail.classList.remove('hidden');
+  var h = '<div class="nd-section"><div class="nd-title">' + escHtml(r.method) + ' ' + escHtml(r.url) + '</div>';
+  h += '<div class="nd-row"><span class="nd-key">Type</span><span>' + (r.type || '?') + '</span></div>';
+  h += '<div class="nd-row"><span class="nd-key">Status</span><span>' + (r.statusCode || '?') + '</span></div></div>';
+  if (r.responseHeaders && Object.keys(r.responseHeaders).length > 0) {
+    h += '<div class="nd-section"><div class="nd-title">Response Headers</div>';
+    Object.keys(r.responseHeaders).forEach(function (k) { h += '<div class="nd-row"><span class="nd-key">' + escHtml(k) + '</span><span class="nd-val">' + escHtml(String(r.responseHeaders[k]).substring(0, 200)) + '</span></div>'; });
+    h += '</div>';
+  }
+  els.netDetailContent.innerHTML = h;
+};
+
+els.netBackBtn.addEventListener('click', function () {
+  els.netDetail.classList.add('hidden');
+  els.netList.classList.remove('hidden');
+});
 
 init();

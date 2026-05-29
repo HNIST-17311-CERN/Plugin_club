@@ -1,11 +1,15 @@
 {
   "manifest_version": 3,
   "name": "页面数据提取",
-  "version": "0.0.2",
-  "description": "提取网页图片、DOM数据、源码和存储信息",
-  "permissions": ["storage", "activeTab", "scripting", "downloads"],
+  "version": "0.0.4",
+  "description": "提取网页图片、DOM数据、源码、存储信息和网络请求",
+  "permissions": ["storage", "activeTab", "scripting", "downloads", "webRequest"],
+  "host_permissions": ["<all_urls>"],
   "action": {
     "default_popup": "popup.html",
-    "default_title": "图片提取"
+    "default_title": "页面数据提取"
+  },
+  "background": {
+    "service_worker": "background.js"
   }
 }

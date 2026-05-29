@@ -405,11 +405,145 @@ Memory 面板所有数据项（Heap Snapshot、Detached DOM Nodes、Allocation T
 
 ---
 
-### 3.6 Network 面板 — 暂不实现
+### 3.6 Network 面板 — 需求分析
 
-> 已确认：Network 面板本期先不做，后续再写。
+#### 3.6.1 可获取的数据（对应 F12 Network 面板）
 
-原因：webRequest 拦截需要 background service worker 驻留 + host_permissions，架构上与当前纯 popup + content script 模式不同，单独排期。
+| 数据项 | 说明 |
+|--------|------|
+| **请求 URL** | 完整地址（protocol + host + path + query + hash） |
+| **请求方法** | GET / POST / PUT / DELETE / PATCH / OPTIONS / HEAD |
+| **请求头** | 全部 Headers（含 Cookie、Authorization、X-Sign、User-Agent、Referer 等） |
+| **请求体** | POST/PUT 提交的 Form Data / JSON / Multipart / Blob |
+| **响应头** | Content-Type、Set-Cookie、CORS 头、缓存头、Server |
+| **响应体** | 返回的 JSON / HTML / XML / 文本 / Blob |
+| **状态码** | 200 / 301 / 302 / 401 / 403 / 404 / 500 等 |
+| **资源类型** | document / script / stylesheet / image / font / media / fetch / xhr / websocket / eventsource / prefetch |
+| **时间线** | DNS、TCP、SSL、TTFB、下载耗时 |
+| **发起者** | 调用栈信息（哪个文件哪一行触发） |
+| **WebSocket 帧** | 每一条消息的方向、时间戳、数据内容 |
+| **SSE 事件** | EventSource 推送的每一条数据 |
+
+#### 3.6.2 对逆向的核心价值
+
+Network 数据是**逆向中最关键的一环**，因为：
+- **API 端点列表** — 自动收集所有后端接口 URL，无需手动翻源码
+- **请求/响应体完整内容** — 看到真实的 JSON 数据结构
+- **请求头中的签名** — `X-Sign`、`Authorization`、`X-Timestamp` 等签名头一目了然
+- **Cookie 随请求的变化** — Set-Cookie 响应头暴露服务端下发的 token
+- **WebSocket 消息** — 实时推送的二进制/文本数据
+
+#### 3.6.3 三种实现方案对比
+
+| | 方案 A：webRequest | 方案 B：前端 Hook | 方案 C：CDP |
+|---|---|---|---|
+| **原理** | background SW 用 `chrome.webRequest` 监听 | Content Script 劫持 `fetch` / `XMLHttpRequest` | `chrome.debugger` 挂载 CDP Network 域 |
+| **捕获范围** | 所有请求（含页面加载时） | 仅 Hook 之后的请求 | 所有请求（含页面加载时） |
+| **能拿到请求体** | 需要 `webRequest.onBeforeRequest` + `requestBody` | 可以（劫持时拦截 body 参数） | 可以（`Network.getResponseBody`） |
+| **能拿到响应体** | 需要额外 fetch 或 CDP | 可以（劫持 then/catch） | 可以 |
+| **WebSocket 帧** | **不能** | 可以（劫持 WebSocket 构造函数） | 可以 |
+| **权限** | `webRequest` + `host_permissions` | 无需额外权限 | `debugger` |
+| **架构变化** | **新增 background SW 文件** | 无架构变化 | **新增 background SW + CDP 逻辑** |
+| **用户体验** | 无感知 | 无感知 | 黄色调试横幅 |
+| **限制** | Manifest V3 下 SW 可能被休眠；不能读响应体 | 只能捕获 Hook 后的请求，错过页面初始加载 | 一次只能调试一个 tab |
+
+#### 3.6.4 核心矛盾：Popup 生命周期 vs 持续捕获
+
+当前架构是纯 popup + `executeScript` 注入。问题是：
+
+| 场景 | 问题 |
+|------|------|
+| 用户点页面其他地方 | **Popup 自动关闭** → 注入的 content script 执行完毕就消失 |
+| 用户操作页面（点击、滚动、提交表单） | Popup 已关闭，无法继续捕获 |
+| SPA 内导航（如小黑盒切帖子） | `window` 对象存活，Hook 可以持续 → **SPA 没问题** |
+| MPA 页面跳转（如论坛翻页） | 整个页面重载，Hook 消失 → **MPA 需要持久化方案** |
+
+#### 3.6.5 修正方案：持久化 Hook + 回收模式
+
+**流程设计**：
+
+```
+用户打开 Popup → 点"开始捕获"
+  → 注入 hook.js（持久版，不随 executeScript 结束而消失）
+  → 所有请求写入 window.__networkCapture[]
+  → Popup 关闭（用户去操作页面）
+  → 用户正常操作，请求持续被捕获
+  → 用户重新打开 Popup
+  → 点"停止并查看"
+  → 注入读取脚本，拿回 window.__networkCapture
+  → 展示 + 导出
+```
+
+**关键技术点**：
+
+1. **Hook 持久化** — 不依赖 popup 生命周期：
+   - 注入的 Hook 脚本用 `setInterval` 或 Event 保持引用
+   - 数据存在 `window.__networkCapture`（SPA 导航不丢失）
+   - 用 `chrome.storage.local` 做二级备份（每隔 N 条或每 N 秒写入一次）
+   - 当前页面的 Hook 也通过 `document.addEventListener` 存活
+
+2. **跨页面导航（MPA）**：
+   - 方案 A：在 `manifest.json` 声明 `content_scripts`，页面加载时自动注入
+   - 方案 B：用 `chrome.storage.local` 做缓冲，每次注入前检查是否有历史数据
+   - 短期方案：SPA 场景直接用，MPA 场景提示用户 "此页面会跳转，数据可能丢失"
+
+3. **回收数据**：
+   - 用户重开 Popup → 注入 `getNetworkData.js` 读取 `window.__networkCapture`
+   - 同时从 `chrome.storage.local` 合并（跨页面数据）
+   - 展示在 Popup 中，支持导出
+
+#### 3.6.6 具体实施
+
+**新增文件**：`network-hook.js`（注入到页面的持久 Hook）
+
+```
+劫持 fetch:
+  记录 { method, url, requestHeaders, requestBody, timestamp }
+  → 调用原始 fetch
+  → .then() 记录 { status, responseHeaders, responseBody, duration }
+
+劫持 XMLHttpRequest:
+  open → 记录 method + url
+  setRequestHeader → 收集请求头
+  send → 记录 body，劫持 onreadystatechange 获取响应
+
+劫持 WebSocket:
+  构造函数 → 记录 url + timestamp
+  onmessage → 记录每帧 { direction: 'in', data, timestamp }
+  send → 劫持记录每帧 { direction: 'out', data, timestamp }
+
+存储:
+  window.__networkCapture = { requests: [], wsFrames: [], startTime: ... }
+  每 10 条请求 → chrome.storage.local.set({ __netbuf: ... })
+```
+
+**Popoup 改动**：
+- 数据 Tab 顶部增加 "开始捕获" 按钮
+- 点击后注入 `network-hook.js`，按钮变为 "停止捕获"
+- 再次打开 Popup 时显示 "捕获中（X 条请求）"，可点 "刷新" 拉取最新数据
+- 停止后数据合并到 `extract.js` 的结果中展示
+
+**数据筛选**：
+- 默认只捕获 XHR/Fetch/WS 类型，不捕获 image/css/font
+- 响应体限制：JSON/Text 完整保留，Blob/Binary 只记大小
+- 最大请求数：500 条（防内存溢出）
+
+#### 3.6.7 本次实现范围
+
+| 特性 | 本次 | 后续 |
+|------|------|------|
+| fetch/XHR 劫持 | ✓ | |
+| WebSocket 劫持 | ✓ | |
+| 请求头/体/响应头/体 完整捕获 | ✓ | |
+| Popup 关闭后持续捕获 | ✓ | |
+| SPA 内导航不丢失 | ✓ | |
+| MPA 跨页面导航持久化 | | ✓ (需 manifest content_scripts) |
+| webRequest API（不刷新全量） | | ✓ (需 background SW) |
+
+#### 3.6.8 待确认
+
+- [ ] 以上方案 OK？先做 SPA 持续捕获，MPA 跨页面后续再做？
+- [ ] 响应体仅捕获 JSON/Text 类型，图片/视频/字体只记 URL + 大小？
 
 ---
 
@@ -451,4 +585,4 @@ Memory 面板所有数据项（Heap Snapshot、Detached DOM Nodes、Allocation T
 | 2026-05-28 | 实现：extract.js 数据提取脚本 + popup 数据标签页 UI |
 | 2026-05-28 | 新增：重点数据自动识别 + "仅看重点"过滤模式 |
 | 2026-05-28 | 优化：重点数据摘要可点击跳转到树中对应位置，自动展开+闪烁高亮 |
-| 2026-05-28 | 新增：签名算法自动检测 — 扫描 JS 文件/代码模式/Cookie，判定是否需要逆向 |
+| 2026-05-28 | 新增：Network 面板前端 Hook 捕获（fetch/XHR/WebSocket） |
