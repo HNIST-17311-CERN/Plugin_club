@@ -7,7 +7,6 @@
 <body>
   <div class="header">
     <h1>页面数据提取</h1>
-    <button id="configBtn" class="config-btn" title="配置">&#9881;</button>
   </div>
 
   <div class="page-info">
@@ -15,12 +14,13 @@
     <span class="title" id="pageTitle">—</span>
   </div>
 
-  <div class="config-panel hidden" id="configPanel">
+  <div class="config-panel" id="configPanel">
     <div class="config-row">
-      <label>DeepSeek API Key</label>
+      <label>DeepSeek Key</label>
       <input id="dsKey" class="apikey-input" type="password" placeholder="sk-...">
+      <button id="saveKeyBtn" class="btn-small">保存</button>
     </div>
-    <div class="config-hint">Key 保存在本地，仅用于 AI 分析网络请求</div>
+    <div class="config-hint" id="configHint"></div>
   </div>
 
   <div class="tab-bar" id="tabBar">

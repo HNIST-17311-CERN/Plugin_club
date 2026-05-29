@@ -1,4 +1,4 @@
-# 浏览器插件 - 需求分析
+# 插件合集 - 需求分析
 
 > 每次需求变更时更新本文档。
 
@@ -574,7 +574,212 @@ Network 数据是**逆向中最关键的一环**，因为：
 
 ---
 
-## 4. 变更记录
+---
+
+## 4. 小黑盒签名算法逆向（实战案例）
+
+> 目标：`https://www.xiaoheihe.cn/bbs/post_share`
+> 源码：`index-FrjtY7ot.js` (747KB, Vite 打包)
+> 日期：2026-05-29
+
+### 4.1 架构概览
+
+小黑盒使用**双层加密**：
+
+| 层 | 函数 | 算法 | 用途 |
+|----|------|------|------|
+| **Body 加密** | `J5` / `e7` | AES-CBC + RSA-1024 + MD5 | 加密请求体 |
+| **Header 签名** | `pt` (CreateHkey) | MD5 + 自定义 XOR 链 + 字符映射 | 生成 hkey 请求头 |
+
+### 4.2 Body 加密层（J5 / e7）
+
+#### RSA 公钥（硬编码）
+
+```
+-----BEGIN PUBLIC KEY-----
+MIGfMA0GCSqGSIb3DQEBAQUAA4GNADCBiQKBgQDZgjVwAiKTjZ55nG+mW6r3TSU4
+ECvNYqDMIS/bhCj2QaH5GI/KZb2TBp+CBvUj9SLFnmJQ0kzHzHoGZCQ88VevCffF
+7JePGF9cmKQqotlfTKbV4oxV5iLz7JSG6b/Vg7AXtrTolNtWsa8HiB0tI0YClYaQ
+lOXm4UxLeSxQwSFETwIDAQAB
+-----END PUBLIC KEY-----
+```
+
+参数：RSA-1024, e=65537
+
+#### 签名流程
+
+```
+请求参数 JSON
+  ↓ [1] Ib() 生成随机 16 字节 AES Key（96 字符集）
+  ↓ [2] uE() AES-128-CBC 加密参数（固定 IV: "abcdefghijklmnop"）
+  ↓ [3] s_() RSA-1024 公钥加密 AES Key
+  ↓ [4] MD5(加密数据 + 时间戳) + MD5(加密Key)
+  ↓
+{ sid, key, data } → 请求体
+```
+
+#### 核心函数
+
+| JS 函数 | 作用 | 细节 |
+|---------|------|------|
+| `Ib()` | 随机 Key | 16 chars, 96 ASCII 字符集, ~104 bits 熵 |
+| `uE(data, key)` | AES-128-CBC | IV = `"abcdefghijklmnop"`（固定） |
+| `s_(key)` | RSA-1024 加密 | 公钥硬编码，打印 `[browser]` 调试日志 |
+| `QC` | JSEncrypt 实例 | jsencrypt@3.3.2 |
+| `Ct` | CryptoJS 库 | AES + MD5 |
+| `J5(e, t)` | 签名函数 | `t` 控制 MD5 拼接顺序 |
+| `e7(e, t)` | 签名函数(gzip) | 先用 Q5 压缩再加密，返回 `{sid,key,data,time}` |
+
+### 4.3 Header 签名层（pt / CreateHkey）
+
+#### 算法流程
+
+```
+path = "/bbs/app/api/link/post"
+time = Unix 秒级时间戳
+nonce = MD5(time + random).toUpperCase()
+
+  ↓
+[1] str1 = av(String(time), "AB45STUVWZ...LMN89", -2)   // 时间映射
+[2] str2 = sv(path, charset)                             // 路径映射
+[3] str3 = sv(nonce, charset)                            // nonce 映射
+[4] merged = oM([str1, str2, str3]).slice(0, 20)         // 简单 zip 交错
+[5] hash = MD5(merged)                                   // MD5 哈希
+[6] last6 = hash.slice(-6) → 转 ASCII 码                 // 取后 6 位
+[7] mixed = Km(last6)                                    // XOR 块变换
+[8] checksum = sum(mixed) % 100                          // 两位校验和
+[9] prefix = av(hash.substring(0,5), charset, -4)        // 前 5 位映射
+  ↓
+hkey = prefix + checksum  →  7 个字符
+```
+
+#### 核心函数对照
+
+| 语义名 | JS 原始名 | 作用 |
+|--------|-----------|------|
+| `Vm` | `_h` | 位变换: `(e<<1) ^ 27` if bit 7 set |
+| `qm` | `Yi` | `_h(e) ^ e` |
+| `$m` | `Go` | `Yi(_h(e))` |
+| `Ym` | `Xs` | `Go(Yi(_h(e)))` |
+| `Gm` | `Vl` | `Xs ^ Go ^ Yi` |
+| `Km` | `iM` | 4 字节块变换（XOR 轮转矩阵） |
+| `av` | `Hg` | 字符映射 (slice) |
+| `sv` | `Ng` | 字符映射 (simple) |
+| `CreateNewStr` | `oM` | **简单 zip 交错**（非排序） |
+| `CreateHkey` | `pt` | 主签名函数 |
+
+#### 字符集
+
+```
+"AB45STUVWZEFGJ6CH01D237IXYPQRKLMN89"
+```
+
+#### 时间容差
+
+```javascript
+qg = {
+  a: (e,t,n) => pt(e, t-1, n),  // -1s
+  b: (e,t,n) => pt(e, t-2, n),  // -2s
+  ...
+  f: (e,t,n) => pt(e, t, n),    //  0s
+  g: (e,t,n) => pt(e, t+1, n),  // +1s
+  ...
+};
+```
+
+服务端在 ±5 秒窗口内验证。
+
+### 4.4 逆向方法论
+
+#### 成功路径：搜 `setPublicKey`
+
+RSA 公钥在代码中非常显眼（`-----BEGIN PUBLIC KEY-----`），顺藤摸瓜找到 `J5`/`e7`。
+
+#### 遗漏点：搜 `Ct.MD5` 或 `MD5(`
+
+`pt`（header 签名）完全不用 RSA，只依赖 MD5 + 自定义 XOR 链 + 字符映射表。在压缩 JS 中：
+- 函数名是 2 字母（`pt`、`Hg`、`Ng`），混在几万个变量中
+- 没出现 `sign`/`hmac`/`encrypt`/`key` 等关键词
+- 字符集 `"AB45STUVWZ..."` 和 `setPublicKey` 隔了 17 万字符，是完全不同的代码区域
+
+**教训**：搜 RSA 公钥只能找到 body 加密层；要找到 header 签名层需要搜 `MD5(` 遍历所有哈希调用点。
+
+### 4.5 安全隐患总结
+
+| 问题 | 位置 | 影响 |
+|------|------|------|
+| AES IV 固定 | `uE()` | 削弱 CBC 安全性 |
+| RSA 仅 1024 位 | `s_()` | 安全性不足 |
+| MD5 签名 | 两层都有 | 存在碰撞风险 |
+| 调试日志 | `s_()` 打印 `[browser]` | 信息泄露 |
+| 字符集固定 | `pt()` | 缩小暴力搜索空间 |
+
+---
+
+## 5. 设备指纹配置（portal101.cn / 数美）
+
+```javascript
+window._smConf = {
+  organization: "0yD85BjYvGFAvHaSQ1mc",
+  appId: "heybox_website",
+  publicKey: "MIGfMA0GCSqGSIb3DQEBAQUAA4GNADCBiQKBgQCXj9exmI4nQjmT52iwr+yf7hAQ06bfSZHTAHUfRBYiagCf/whhd8es0R79wBigpiHLd28TKA8b8mGR8OiiI1hV+qfynCWihvp3mdj8MiiH6SU3lhro2hkfYzImZB0RmWr2zE4Xt1+A6Oyp6bf+W7JSxYUXHw3nNv7Td4jw4jEFKQIDAQAB",
+  staticHost: "static.portal101.cn",
+  protocol: "https"
+};
+```
+
+设备指纹由 `fp.min.js` 采集，RSA 公钥 #2 加密后上报。
+
+---
+
+---
+
+## 6. VS Code 插件 — 打字连击追踪
+
+### 6.1 功能描述
+
+打字节奏追踪器：记录连续击键，5 秒内敲下视为连击继续，超时断开。
+
+### 6.2 显示设计
+
+状态栏右端显示：
+
+```
+⚡ 25 [B] ████████████░░░░░░░░
+  ↑      ↑            ↑
+ 连击数 等级    进度条(从右消失)
+```
+
+- 进度条 20 块，每 250ms 消去一块 = 5 秒总时长
+- 满块 `█` 白色 → 每 250ms 从右端消去一个变 `░` 灰色
+- 每次打字重置为满
+
+### 6.3 连击等级（可配置）
+
+| 等级 | 默认阈值 | 状态栏颜色 |
+|------|----------|------------|
+| SSS | 500+ | 金色 #FFD700 |
+| SS  | 200+ | 红色 |
+| S   | 100+ | 橙色 |
+| A   | 60+  | 紫色 |
+| B   | 30+  | 蓝色 |
+| C   | 15+  | 绿色 |
+| D   | 5+   | 灰色 |
+
+### 6.4 交互
+
+| 操作 | 说明 |
+|------|------|
+| 点击状态栏 | 重置连击数 |
+| `Ctrl+Shift+P` → 打字连击: 开关 | 启用/禁用 |
+| `Ctrl+Shift+P` → 打字连击: 重置 | 手动重置 |
+| 配置项 | `typingCombo.timeout` / `thresholdD` ~ `thresholdSSS` |
+
+### 6.5 已实现 ✓
+
+---
+
+## 7. 变更记录
 
 | 日期 | 变更内容 |
 |------|----------|
@@ -586,3 +791,4 @@ Network 数据是**逆向中最关键的一环**，因为：
 | 2026-05-28 | 新增：重点数据自动识别 + "仅看重点"过滤模式 |
 | 2026-05-28 | 优化：重点数据摘要可点击跳转到树中对应位置，自动展开+闪烁高亮 |
 | 2026-05-28 | 新增：Network 面板前端 Hook 捕获（fetch/XHR/WebSocket） |
+| 2026-05-29 | 实战：小黑盒签名算法完整逆向（Body AES+RSA + Header MD5+XOR 双层） |

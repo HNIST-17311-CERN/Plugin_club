@@ -1,19 +1,44 @@
 {
-  "name": "my-vscode-extension",
-  "displayName": "My VS Code Extension",
+  "name": "typing-combo-tracker",
+  "displayName": "打字连击",
   "version": "0.0.1",
-  "description": "一个简单的 VS Code 插件",
+  "description": "追踪打字连击数，5秒进度条倒计时，连击等级评分",
   "engines": {
     "vscode": "^1.85.0"
   },
-  "activationEvents": [],
+  "activationEvents": ["onStartupFinished"],
   "main": "./extension.js",
   "contributes": {
     "commands": [
       {
-        "command": "myExtension.helloWorld",
-        "title": "Hello World"
+        "command": "typingCombo.toggle",
+        "title": "打字连击: 开关"
+      },
+      {
+        "command": "typingCombo.reset",
+        "title": "打字连击: 重置"
+      },
+      {
+        "command": "typingCombo.open",
+        "title": "打字连击: 打开面板"
       }
-    ]
+    ],
+    "configuration": {
+      "title": "打字连击",
+      "properties": {
+        "typingCombo.timeout": {
+          "type": "number",
+          "default": 5,
+          "description": "连击超时秒数"
+        },
+        "typingCombo.thresholdD": { "type": "number", "default": 5, "description": "D 级最低连击数" },
+        "typingCombo.thresholdC": { "type": "number", "default": 15, "description": "C 级最低连击数" },
+        "typingCombo.thresholdB": { "type": "number", "default": 30, "description": "B 级最低连击数" },
+        "typingCombo.thresholdA": { "type": "number", "default": 60, "description": "A 级最低连击数" },
+        "typingCombo.thresholdS": { "type": "number", "default": 100, "description": "S 级最低连击数" },
+        "typingCombo.thresholdSS": { "type": "number", "default": 200, "description": "SS 级最低连击数" },
+        "typingCombo.thresholdSSS": { "type": "number", "default": 500, "description": "SSS 级最低连击数" }
+      }
+    }
   }
 }

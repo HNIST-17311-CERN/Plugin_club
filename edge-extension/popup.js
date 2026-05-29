@@ -4,9 +4,9 @@ var els = {
   pageTitle: document.getElementById('pageTitle'),
   statusText: document.getElementById('statusText'),
   // 配置
-  configBtn: document.getElementById('configBtn'),
-  configPanel: document.getElementById('configPanel'),
   dsKey: document.getElementById('dsKey'),
+  saveKeyBtn: document.getElementById('saveKeyBtn'),
+  configHint: document.getElementById('configHint'),
   // 标签
   tabBtns: document.querySelectorAll('.tab-btn'),
   // 图片
@@ -69,17 +69,17 @@ els.tabBtns.forEach(function (btn) {
   });
 });
 
-// 配置面板开关
-els.configBtn.addEventListener('click', function () {
-  els.configPanel.classList.toggle('hidden');
-});
-
-// 加载保存的 API Key（放在 init 之前即可，init 里不涉及它）
+// 配置面板 — API Key
 chrome.storage.local.get('ds_api_key', function (r) {
-  if (r.ds_api_key) els.dsKey.value = r.ds_api_key;
+  if (r.ds_api_key) { els.dsKey.value = r.ds_api_key; els.configHint.textContent = '已加载保存的 Key'; }
 });
-els.dsKey.addEventListener('input', function () {
-  chrome.storage.local.set({ ds_api_key: this.value.trim() });
+els.saveKeyBtn.addEventListener('click', function () {
+  var v = els.dsKey.value.trim();
+  if (!v) { els.configHint.textContent = 'Key 不能为空'; return; }
+  chrome.storage.local.set({ ds_api_key: v }, function () {
+    els.configHint.textContent = '已保存!';
+    setTimeout(function () { els.configHint.textContent = ''; }, 1500);
+  });
 });
 
 // --- 初始化 ---
